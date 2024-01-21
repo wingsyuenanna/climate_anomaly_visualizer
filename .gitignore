@@ -1,0 +1,12 @@
+__pycache__/
+.Python
+.ipynb_checkpoints
+
+# Python venv packages
+bin/
+etc/
+include/
+lib/
+share/
+
+.env
