@@ -10,3 +10,9 @@ lib/
 share/
 
 .env
+<<<<<<< HEAD
+=======
+
+.DS_Store
+pyvenv.cfg
+>>>>>>> 58173a3 (add all aux files)
