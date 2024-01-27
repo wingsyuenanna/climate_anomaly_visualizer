@@ -2,10 +2,12 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 import requests
-from io import StringIO
 import folium
 from streamlit_folium import st_folium
 import json
+import datetime
+from dateutil.relativedelta import relativedelta
+
 
 # Geoids that are in the gist county data but not in the ncei data
 MISSING_GEOID_NCEI = ['72101', '72109', '72087', '72095', '72031', '72053', '72071',
@@ -29,69 +31,99 @@ MISSING_GEOID_NCEI = ['72101', '72109', '72087', '72095', '72031', '72053', '720
 # Dictionary for time selector for quick quering
 TIME_SCALE_SELECTOR = {'1-Month': 1, '2-Month': 2, '3-Month': 3, '4-Month': 4, '5-Month': 5, '6-Month': 6, '7-Month': 7, '8-Month': 8, '9-Month': 9, '10-Month': 10, '11-Month': 11, '12-Month': 12, '18-Month': 18, '24-Month': 24, '36-Month': 36, '48-Month': 48, '60-Month': 60}
 
-st.title('Climate Anomalies in the US')
 
 @st.cache_data
-def load_data(year: int, month: int, time_scale: str):
+def request_all_data(year: tuple, month: tuple):
     """
-    Loads average temperature data based on year, month, time_scale
+    Given the range of years and months, request the required average temperatures by month and average them by county
     
-    :param year: any year between 1895-2023
-    :param month: month shown (end of the time_scale)
-    :param time_scale: period of time when the temperature is averaged ('1-month' to '60-month')
-    :returns: dataframe of all the average temperatures by county
+    :param year: tuple of the range of years to search, between 1895-2023
+    :param month: tuple of range of months to search
+    :returns: dataframe of all the average temperatures by countyId
+    """
+    county_data = []
+    year_col = []
+
+    for curr_year in range(year[0], year[1] + 1):
+        for curr_month in range(month[0], month[1] + 1):
+            url = f'https://www.ncei.noaa.gov/access/monitoring/climate-at-a-glance/county/mapping/110-tavg-{curr_year}{curr_month:02}-1.json'
+            res = requests.get(url)
+            data = res.json()['data']
+            
+            year_col.extend([curr_year] * len(data.values()))
+            county_data.extend(data.values())
+    df = pd.json_normalize(county_data)
+    df['year'] = year_col
+
+    # average all of the average temperatures
+    df = df[['name', 'stateAbbr', 'value', 'anomaly', 'mean']].groupby(['name', 'stateAbbr']).agg(lambda x: np.mean(x)).reset_index()
+
+    return df
+
+
+@st.cache_data
+def load_data(year: tuple, month: tuple):
+    """
+    Loads average temperature data based on year, and month and match the county to the correct county Id using county_to_fips dataset
+    
+    :param year: tuple of the range of years to search, between 1895-2023
+    :param month: tuple of range of months to search
+    :returns: dataframe of all the average temperatures by countyId
     """
 
-    print(f"Getting data for year - {year}, month - {month:02}, time scale - {time_scale}")
-    url = f'https://www.ncei.noaa.gov/access/monitoring/climate-at-a-glance/county/mapping/110-tavg-{year}{month:02}-{time_scale}.json'
+    sliding_df = request_all_data(year, month)
 
-    res = requests.get(url)
-    data = res.json()['data']
-    subtitle = res.json()['description']['title']
-
-    # Load county FIPS mapping
     f = open('./county_to_fips.json')
     county_FIPS = json.load(f)
 
-    county_data = []
-    for county in data:
-        data[county]["countyId"] = county_FIPS[data[county]['name'] + "_" + data[county]['stateAbbr']]
-        county_data.append(data[county])
+    sliding_df['name_stateAbbr'] = sliding_df['name'] + "_" + sliding_df['stateAbbr']
+    sliding_df['countyId'] = [county_FIPS[r['name_stateAbbr']] for i, r in sliding_df.iterrows()]
 
-    df = pd.json_normalize(county_data)
-    return subtitle, df
+    return sliding_df
 
 @st.cache_data
 def extract_json_elem():
-    county_url = 'https://gist.githubusercontent.com/sdwfrost/d1c73f91dd9d175998ed166eb216994a/raw/e89c35f308cee7e2e5a784e1d3afc5d449e9e4bb/counties.geojson'
+    """
+    Gets the county geojson and 
+    extract the features from county geojson 
+    to match the climate average temperature data source
     
+    :param : None
+    :returns: dataframe of all the average temperatures by countyId without counties from Alaska, Hawaii or US territories
+    """
+    
+    county_url = 'https://gist.githubusercontent.com/sdwfrost/d1c73f91dd9d175998ed166eb216994a/raw/e89c35f308cee7e2e5a784e1d3afc5d449e9e4bb/counties.geojson'
     res = requests.get(county_url)
 
     res_json = res.json()
     extracted_features = []
     features = res_json['features']
-    print(len(features))
     for doc in features:
-        # print(doc.keys())
         if doc['properties']['STATEFP'] not in MISSING_GEOID_NCEI:
             extracted_features.append(doc)
     extracted_json = res_json
     extracted_json['features'] = extracted_features
     return extracted_json
 
-def load_map(anomaly_data):
+def load_map(temp_data):
+    """
+    Gets temperature data and creates Choroplete map of the termperatue change
+    
+    :param : temp_data - dataframe of temperature per country
+    :returns: folium map object of Choropleth map
+    """
     # Center of the US, zoomed to frame the continuous US
     m = folium.Map(location=(37.0902, -95.7129), zoom_start=4, tiles="cartodb positron")
     m.save("footprint.html")
     
-    # print(res_json)
+    # Only get geojson objects of 
     extracted_json_elem = extract_json_elem()
     with open("gist_geojson.json", "w") as outfile:
         json.dump(extracted_json_elem, outfile)
 
     folium.Choropleth(
         geo_data=extracted_json_elem,
-        data=anomaly_data,
+        data=temp_data,
         columns=["countyId", "anomaly"],
         key_on=("feature.properties.GEOID"),
         Highlight= True,
@@ -99,14 +131,16 @@ def load_map(anomaly_data):
     ).add_to(m)
     return m
 
-year = st.slider("Year: ", 1895, 2023, 2023)
-month = st.slider("Month: ", 1, 12, 1)
-time_scale = st.selectbox("Time Scale: ", tuple(list(TIME_SCALE_SELECTOR.keys())))
 
-if(year and month and time_scale):
-    subheader, data = load_data(year, month, TIME_SCALE_SELECTOR[time_scale])
+### Main
+st.title('Climate Anomalies in the US')
+
+year = st.slider("Year: ", 2001, 2023, (2022, 2023))
+month = st.slider("Month: ", 1, 12, (1, 12))
+
+if(year and month):
+    data = load_data(year, month)
     folium_map = st_folium(load_map(data), width=725)
 
 if st.checkbox('Show raw data'):
-    st.subheader(subheader)
     st.write(data)
