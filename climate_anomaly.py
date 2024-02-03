@@ -8,6 +8,8 @@ import json
 import datetime
 from dateutil.relativedelta import relativedelta
 
+# Lat, Long of center of map
+CENTRAL_XY = (37.0902, -95.7129)
 
 # Geoids that are in the gist county data but not in the ncei data
 MISSING_GEOID_NCEI = ['72101', '72109', '72087', '72095', '72031', '72053', '72071',
@@ -44,6 +46,7 @@ def request_all_data(year: tuple, month: tuple):
     county_data = []
     year_col = []
 
+    # Iterate through to make into an averaged dataframe
     for curr_year in range(year[0], year[1] + 1):
         for curr_month in range(month[0], month[1] + 1):
             url = f'https://www.ncei.noaa.gov/access/monitoring/climate-at-a-glance/county/mapping/110-tavg-{curr_year}{curr_month:02}-1.json'
@@ -70,12 +73,14 @@ def load_data(year: tuple, month: tuple):
     :param month: tuple of range of months to search
     :returns: dataframe of all the average temperatures by countyId
     """
-
+    # Get dataframe with the proper year and months
     sliding_df = request_all_data(year, month)
 
-    f = open('./county_to_fips.json')
+    # Gets a json of counties to federal ids
+    f = open('./Data/county_to_fips.json')
     county_FIPS = json.load(f)
 
+    # Match the name of counties and states to the country_FIPS mapping to get the unique FIPS per county
     sliding_df['name_stateAbbr'] = sliding_df['name'] + "_" + sliding_df['stateAbbr']
     sliding_df['countyId'] = [county_FIPS[r['name_stateAbbr']] for i, r in sliding_df.iterrows()]
 
@@ -86,16 +91,17 @@ def extract_json_elem():
     """
     Gets the county geojson and 
     extract the features from county geojson 
-    to match the climate average temperature data source
+    to match the climate average temperature data source. Only ran once to extract features for mismatches between nist and geojson
     
     :param : None
     :returns: dataframe of all the average temperatures by countyId without counties from Alaska, Hawaii or US territories
     """
     
-    county_url = 'https://gist.githubusercontent.com/sdwfrost/d1c73f91dd9d175998ed166eb216994a/raw/e89c35f308cee7e2e5a784e1d3afc5d449e9e4bb/counties.geojson'
-    res = requests.get(county_url)
+    # Get geojson of counties from 'https://gist.githubusercontent.com/sdwfrost/d1c73f91dd9d175998ed166eb216994a/raw/e89c35f308cee7e2e5a784e1d3afc5d449e9e4bb/counties.geojson'
+    f = open('./Data/counties.geojson')
+    res_json = json.load(f)
 
-    res_json = res.json()
+    # Remove counties that are not in the ncei data
     extracted_features = []
     features = res_json['features']
     for doc in features:
@@ -107,22 +113,21 @@ def extract_json_elem():
 
 def load_map(temp_data):
     """
-    Gets temperature data and creates Choroplete map of the termperatue change
+    Gets temperature data and creates Choropleth map of the termperatue change
     
     :param : temp_data - dataframe of temperature per country
     :returns: folium map object of Choropleth map
     """
     # Center of the US, zoomed to frame the continuous US
-    m = folium.Map(location=(37.0902, -95.7129), zoom_start=4, tiles="cartodb positron")
+    m = folium.Map(location=CENTRAL_XY, zoom_start=4, tiles="cartodb positron")
     m.save("footprint.html")
-    
-    # Only get geojson objects of 
-    extracted_json_elem = extract_json_elem()
-    with open("gist_geojson.json", "w") as outfile:
-        json.dump(extracted_json_elem, outfile)
+
+    # Used extract_json_elem to create this geojson
+    f = open('./Data/gist_geojson.json')
+    gist_geojson = json.load(f)
 
     folium.Choropleth(
-        geo_data=extracted_json_elem,
+        geo_data=gist_geojson,
         data=temp_data,
         columns=["countyId", "anomaly"],
         key_on=("feature.properties.GEOID"),
