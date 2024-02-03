@@ -7,6 +7,9 @@ Climate anomaly is calculated by finding the difference between average temperat
 
 ```streamlit run climate_anomaly.py```
 
+<img width="785" alt="image" src="https://github.com/wingsyuenanna/climate_anomaly_visualizer/assets/157236138/932ceeb2-c03d-48a0-93d7-11735b582831">
+
+
 ### Data
 
 I used a couple of resources for my data. 
